@@ -1,0 +1,249 @@
+//@version=6
+indicator("ICT Opening Range Projections", shorttitle="ICT ORP", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// TODOs:
+// - add range quadrants
+// - calc range from swing point
+// - extend options (offset ahead of current candle, to next session)
+// - keep historical sessions X days, extend option
+
+type OpeningRange
+    bool is_new
+    bool is_confirmed
+    int start_index
+    int start_time
+    int end_index
+    int end_time
+    float range_low
+    float range_high
+    line line_open_price
+    label label_open_price
+    array<line> line_session
+    array<line> line_projections_high
+    array<label> label_projections_high
+    array<line> line_projections_low
+    array<label> label_projections_low
+    array<line> line_quadrants
+    array<label> label_quadrants
+
+var string dateFormat = "MM-dd (E)"
+var string timeFormat = "HH:mm"
+var string numberFormat = "#.0000"
+var array<OpeningRange> openingRanges = array.new<OpeningRange>()
+
+string tz = "America/New_York"
+string titleNone = ""
+string titleLineStyle = "Line Style"
+string titleShowLabels = "Show Labels"
+
+// Inputs for Opening Range Sessions
+string groupOpeningRange = "Opening Range Sessions"
+bool nyToggle = input.bool(true, title="NY 9:30 - 10:00 AM", group=groupOpeningRange)
+bool midnightToggle = input.bool(true, title="Midnight 00:00 - 00:30 AM", group=groupOpeningRange)
+
+// Inputs for Sessions
+string groupSessions = "Sessions"
+string inlineSession = "sessions"
+bool sessionsToggle = input.bool(true, title="Enable", group=groupSessions, tooltip="Show session lines.")
+color sessionsColor = input.color(color.new(color.black, 50), title=titleLineStyle, group=groupSessions, inline=inlineSession)
+string sessionsStyle = input.string( "solid", title=titleNone, options=["solid", "dotted", "dashed"], group=groupSessions, inline=inlineSession)
+int sessionsWidth = input.int(1, title="Width", minval=1, maxval=5, group=groupSessions, inline=inlineSession)
+bool sessionsLabelToggle = input.bool(true, title=titleShowLabels, group=groupSessions)
+
+// Inputs for Opening Price
+string groupOpeningPrice = "Opening Price"
+string inlineOpeningPrice = "opening_price"
+bool openingPriceToggle = input.bool(true, title="Enable", group=groupOpeningPrice, tooltip="Show opening price of the range.")
+color openingPriceColor = input.color(color.blue, title=titleLineStyle, group=groupOpeningPrice, inline=inlineOpeningPrice)
+string openingPriceStyle = input.string( "solid", title=titleNone, options=["solid", "dotted", "dashed"], group=groupOpeningPrice, inline=inlineOpeningPrice)
+int openingPriceWidth = input.int(1, title="Width", minval=1, maxval=5, group=groupOpeningPrice, inline=inlineOpeningPrice)
+//int openingPriceExtend = input.int(-1, title="Extend", minval=-1, group=groupOpeningPrice, tooltip="Set to -1 to disable extension.")
+bool openingPriceLabelToggle = input.bool(true, titleShowLabels, group=groupOpeningPrice)
+
+// Inputs for Range Levels
+string groupRangeLevels = "Range Levels"
+string inlineRange = "range"
+string inlineRangeStyle = "range_style"
+string inlineRangeLabel = "range_label"
+string inlineQuad = "quad_style"
+bool rangeLevelsToggle = input.bool(true, title="Enable", group=groupRangeLevels, inline=inlineRange)
+bool rangeLevelsFromSwingToggle = input.bool(true, title="From Swing Points", group=groupRangeLevels, inline=inlineRange, tooltip="Show range high and low values, optionally determined by swing points.")
+color rangeLevelsColor = input.color(color.new(color.purple, 0), title=titleLineStyle, group=groupRangeLevels, inline=inlineRangeStyle)
+string rangeLevelsStyle = input.string("solid", title=titleNone, options=["solid", "dotted", "dashed"], group=groupRangeLevels, inline=inlineRangeStyle)
+int rangeLevelsWidth = input.int(1, minval=1, title=titleNone, group=groupRangeLevels, inline=inlineRangeStyle)
+bool rangeQuadLevelsToggle = input.bool(true, title="Show Quadrants", group=groupRangeLevels, tooltip="Show quadrant levels (25%, 50%, 75%) within the range.")
+color rangeQuadLevelsColor = input.color(color.new(color.purple, 50), title=titleLineStyle, group=groupRangeLevels, inline=inlineQuad)
+string rangeQuadLevelsStyle = input.string("dotted", title=titleNone, options=["solid", "dotted", "dashed"], group=groupRangeLevels, inline=inlineQuad)
+int rangeQuadLevelsWidth = input.int(1, minval=1, title=titleNone, group=groupRangeLevels, inline=inlineQuad)
+//int rangeLevelsExtend = input.int(-1, title="Extend", minval=-1, group=groupRangeLevels, tooltip="Set to -1 to disable extension.")
+bool rangeLabelToggle = input.bool(true, titleShowLabels, group=groupRangeLevels)
+
+// Inputs for Projections
+string groupProjections = "Projections"
+string inlineProjectionsStyle = "projections_style"
+bool projectionsToggle = input.bool(true, title="Enable", group=groupProjections, tooltip="Show range projections")
+float projectionsSTD = input.float(2.0, title="Max Standard Deviation", minval=0.5, maxval=10.0, step=0.5, group=groupProjections, tooltip="Maximum STD level to project in increments of 0.5.")
+color projectionsColor = input.color(color.red, title=titleLineStyle, group=groupProjections, inline=inlineProjectionsStyle)
+string projectionsStyle = input.string("dotted", title=titleNone, options=["solid", "dotted", "dashed"], group=groupProjections, inline=inlineProjectionsStyle)
+int projectionsWidth = input.int(1, minval=1, title=titleNone, group=groupProjections, inline=inlineProjectionsStyle)
+//int projectionsExtend = input.int(-1, title="Extend", minval=-1, group=groupProjections, tooltip="Set to -1 to disable extension.")
+bool projectionLabelToggle = input.bool(true, title=titleShowLabels, group=groupProjections)
+string labelsProjectionContent = input.string("Level", title="Projections Content", options=["Price", "Level", "Both"], group=groupProjections, tooltip="Choose what content to display on projection labels.")
+
+// Inputs for Labels/Lines
+string groupGeneral = "Lines and Labels"
+string inlineLabel = "label"
+string inlineStyle = "style"
+int lineExtension = input.int(5, title="Extend Lines", minval=-2, group=groupGeneral
+ , tooltip="0   -> Disabled; Lines end at the session\n≧1 -> Offset ahead of current candle\n-1 -> Extend to next session\n-2 -> Extend indefinitely") 
+string labelsXPos = input.string("right", title="Label Position", options=["left", "center", "right"], group=groupGeneral, inline=inlineLabel)
+string labelsYPos = input.string("top", title=titleNone, options=["top", "center", "bottom"], group=groupGeneral, inline=inlineLabel)
+color labelsColor = input.color(color.black,  title="Label Style", group=groupGeneral, inline=inlineStyle)
+string labelsSize = input.string("small", title=titleNone, options=["tiny", "small", "normal", "large", "huge"], group=groupGeneral, inline=inlineStyle)
+
+// -- VARIABLES --
+// The most recent range, either currently-forming or after session has closed
+var OpeningRange r = na
+
+// Opening range sessions
+int nyAmStart = timestamp(tz, year(time), month(time), dayofmonth(time), 9, 30)
+int nyAmEnd = timestamp(tz, year(time), month(time), dayofmonth(time), 10, 0)
+int nyPmStart = timestamp(tz, year(time), month(time), dayofmonth(time), 13, 30)
+int nyPmEnd = timestamp(tz, year(time), month(time), dayofmonth(time), 14, 00)
+int midnightStart = timestamp(tz, year(time), month(time), dayofmonth(time)+1, 0, 0)
+int midnightEnd = timestamp(tz, year(time), month(time), dayofmonth(time)+1, 0, 30)
+
+// Check if time is currently within a opening range session
+bool isNyAmRange = time >= nyAmStart and time <= nyAmEnd
+bool isNyPmRange = time >= nyPmStart and time <= nyPmEnd
+bool isMidnightRange = time >= midnightStart and time <= midnightEnd
+
+getLineStyle(inputStyle) =>
+    switch inputStyle
+        "solid" => line.style_solid
+        "dotted" => line.style_dotted
+        "dashed" => line.style_dashed
+        => line.style_solid
+
+updateCurrentRange(array<OpeningRange> ranges, int startTime, int endTime) =>
+    OpeningRange r = na
+
+    // Check if the most recent range instance
+    for [i, _range] in ranges
+        if _range.start_time == startTime and _range.end_time == endTime
+            r := _range
+            break
+
+    if na(r) // New range
+        r := OpeningRange.new(true, false, bar_index, startTime, na, endTime, low, high, na, na, array.new_line(), array.new_line(), array.new_label(), array.new_line(), array.new_label(), array.new_line(), array.new_label())
+        array.unshift(ranges, r)
+    else // Existing (current) range
+        r.is_new := false
+        r.is_confirmed := endTime == time
+        r.range_low := math.min(r.range_low, low)
+        r.range_high := math.max(r.range_high, high)
+        r.end_index := bar_index
+    
+    r
+
+// Function to generate formatted date label
+getDateLabel(timestamp) =>
+    string dateStr = str.format_time(timestamp, dateFormat, tz)
+    string timeStr = str.format_time(timestamp, timeFormat, tz)
+    str.format("{0} - {1}", dateStr, timeStr)
+
+
+method isForming(OpeningRange r) => r.end_time >= time 
+
+method drawLevels(OpeningRange r) =>
+    float rangeSize = r.range_high - r.range_low
+    int endTime = r.start_time + 30 * 60 * 1000
+
+    // Start of the new session/range
+    if r.is_new
+        if sessionsToggle
+            line sessionStart = line.new(x1=r.start_time, y1=open, x2=r.start_time, y2=close, extend=extend.both, xloc=xloc.bar_time, color=sessionsColor, style=getLineStyle(sessionsStyle), width=sessionsWidth)
+            line sessionEnd = line.new(x1=endTime, y1=open, x2=endTime, y2=close, extend=extend.both, xloc=xloc.bar_time, color=sessionsColor, style=getLineStyle(sessionsStyle), width=sessionsWidth)
+            r.line_session.push(sessionStart)
+            r.line_session.push(sessionEnd)
+
+            if sessionsLabelToggle
+                tfs = (60 / (timeframe.in_seconds(timeframe.period) / 60)) / 2
+                
+        
+        if openingPriceToggle
+            line openPriceLine = line.new(x1=r.start_index, y1=open, x2=r.start_index + 100, y2=open, xloc=xloc.bar_index, color=openingPriceColor, style=getLineStyle(openingPriceStyle), width=openingPriceWidth)
+            r.line_open_price := openPriceLine
+
+            if openingPriceLabelToggle
+                label l = label.new(x=r.start_index, y=open, text=getDateLabel(r.start_time), xloc=xloc.bar_index, textcolor=openingPriceColor, textalign=text.align_right, style=label.style_none)
+                r.label_open_price := l
+
+
+    // Ending of the session/range
+    if r.is_confirmed
+        if rangeLevelsToggle
+            line.new(x1=r.end_index, y1=r.range_low, x2=bar_index + 100, y2=r.range_low, xloc=xloc.bar_index, color=rangeLevelsColor, style=line.style_dashed, width=rangeLevelsWidth)
+            line.new(x1=r.end_index, y1=r.range_high, x2=bar_index + 100, y2=r.range_high, xloc=xloc.bar_index, color=rangeLevelsColor, style=line.style_dashed, width=rangeLevelsWidth)
+
+        if projectionsToggle
+            for lvl = 1 to int(projectionsSTD / 0.5)
+                float priceLow = r.range_low + (lvl * -0.5 * rangeSize)
+                float priceHigh = r.range_high + (lvl * 0.5 * rangeSize)
+                line lineLow = line.new(x1=r.end_index, y1=priceLow, x2=bar_index + 100, y2=priceLow, xloc=xloc.bar_index, color=projectionsColor, style=line.style_dotted, width=projectionsWidth)
+                line lineHigh = line.new(x1=r.end_index, y1=priceHigh, x2=bar_index + 100, y2=priceHigh, xloc=xloc.bar_index, color=projectionsColor, style=line.style_dotted, width=projectionsWidth)
+
+        // array.push(range.line_projections_high if lvl > 0 else range.line_projections_low, l)
+        // if showLbl
+        //     label lbl = label.new(bar_index, price, str.tostring(price, format.monetary), color=color.new(color, 0), textcolor=lblColor, style=label.style_label_down, size=lblSize)
+        //     array.push(range.label_projections_high if lvl > 0 else range.label_projections_low, lbl)
+
+method extendLevels(OpeningRange r) =>
+    // something
+    true
+
+// -- MAIN EXECUTION --
+
+// Currently only 1m timeframe is allowed based on ICT teachings
+// TODO: add multi-timeframe support
+bool timeframeAllowed = timeframe.in_seconds(timeframe.period) == 60
+if not timeframeAllowed
+    runtime.error("[ICT ORP] Only 1m timeframe is supported.")
+
+// Validate projection value against manual input to ensure it is in .5 increments
+if ((projectionsSTD * 10) % 5) != 0
+    float roundedSTD = math.round(projectionsSTD * 2) / 2
+    runtime.error(str.format("[ICT ORP] Invalid Max Standard Deviation ({0}). Using {1, number, #.#}.", projectionsSTD, roundedSTD))
+
+// Either no range has been set yet or transitioning to a new range session
+if na(r) 
+    if isMidnightRange
+        currentRange := updateCurrentRange(openingRanges, midnightStart, midnightEnd)
+    else if isNyAmRange
+        currentRange := updateCurrentRange(openingRanges, nyAmStart, nyAmEnd)
+    else if isNyPmRange
+        currentRange := updateCurrentRange(openingRanges, nyPmStart, nyPmEnd)
+
+if not na(currentRange)
+    r := currentRange
+else
+    r := latestRange
+
+
+// Draw levels for all ranges when the bar is the last of the day
+if barstate.isconfirmed and not na(r)
+    // for i = 0 to array.size(openingRanges) - 1
+    //     OpeningRange range = array.get(openingRanges, i)
+    r.drawLevels()
+
+// Plot session labels
+int plotOffset = (30 / (timeframe.in_seconds(timeframe.period) / 60)) / 2
+bool shouldPlotSessionLabels = timeframeAllowed and sessionsLabelToggle and barstate.isconfirmed and not na(currentRange)
+
+plotchar(shouldPlotSessionLabels and time == nyAmStart
+ , text= 'Opening Range\nNY AM', location=location.top, color=color(na)
+ , textcolor=sessionsColor, offset=plotOffset)
+
+plotchar(shouldPlotSessionLabels and time == midnightStart
+ , text= 'Opening Range\nMidnight', location=location.top, color=color(na)
+ , textcolor=sessionsColor, offset=plotOffset)

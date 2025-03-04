@@ -1,3 +1,7 @@
+// This is a modified copy of the [Smart Money Concepts by LuxAlgo](https://www.tradingview.com/script/CnB3fSph-Smart-Money-Concepts-LuxAlgo/) indicator.
+// The intent of this modified script is to fix issues and apply new features to help visualize price action in a more customizable manner.
+
+
 // This work is licensed under a Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0) https://creativecommons.org/licenses/by-nc-sa/4.0/
 // © LuxAlgo
 
