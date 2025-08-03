@@ -1,0 +1,259 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © tristanlee85
+
+//@version=5
+
+// @description A utility library with functionality based around smart money concepts as authored by TheInnerCircleTrader (ICT).
+library("ICTHelper")
+
+const string DATE_FORMAT = "MM-dd (E)"
+const string TIME_FORMAT = "HH:mm"
+const string NUMBER_FORMAT = "#.0000"
+const string DEFAULT_TIMEZONE = "America/New_York"
+const string DEFAULT_INTERVAL = "1"
+
+// @function		Returns the value if it is not `na`, otherwise returns the default value
+// @param v		The value to check
+// @param d		The default value to return if `v` is `na`
+// @returns		The value if it is not `na`, otherwise the default value
+val(string v, string d) => not na(v) ? v : d
+
+// @enum Line extend options
+// @field curr
+// @field next
+// @field bidx
+export enum ExtendType
+    curr = "Current Session"
+    next = "Next Session"
+    bidx = "Current Bar"
+
+// @enum Line style options
+// @field solid
+// @field dashed
+// @field dotted
+export enum LineStyleType
+    solid = "Solid"
+    dash  = "Dashed"
+    dots  = "Dotted"
+
+// @enum Text size options
+// @field tiny
+// @field small
+// @field normal
+// @field large
+// @field huge
+export enum TextSizeType
+    tiny    = "Tiny"
+    small   = "Small"
+    normal  = "Normal"
+    large   = "Large"
+    huge    = "Huge"
+
+// @enum Sentiment
+// @field BULLISH
+// @field BEARISH
+export enum Sentiment
+    BULLISH = "+"
+    BEARISH = "-"
+
+// @enum Price data array
+// @field FVG
+// @field FVG_FULL
+// @field IFVG
+// @field IFVG_FULL
+// @field VI
+// @field VI_FULL
+export enum PDArray
+    FVG         = "FVG"
+    FVG_FULL    = "Fair Value Gap"
+    IFVG        = "IFVG"
+    IFVG_FULL   = "Inversion Fair Value Gap"
+    VI          = "VI"
+    VI_FULL     = "Volume Imbalance"
+    LV          = "LV"
+    LV_FULL     = "Liquidity Void"
+    OB          = "OB"
+    OB_FULL     = "Order Block"
+    BRKR        = "BRKR"
+    BRKR_FULL   = "Breaker"
+
+// @function     Returns line style based on the specified type
+// @param opt    The selected input type
+export style_getLineStyleFromType(LineStyleType opt) =>
+    result = switch opt
+        LineStyleType.solid => line.style_solid
+        LineStyleType.dash => line.style_dashed
+        LineStyleType.dots => line.style_dotted
+
+// @function     Returns label style based on the input selection
+// @param opt    The selected input size
+export style_getTextSizeFromType(TextSizeType opt) =>
+    result = switch opt
+        TextSizeType.tiny => size.tiny
+        TextSizeType.small => size.small
+        TextSizeType.normal => size.normal
+        TextSizeType.large => size.large
+        TextSizeType.huge => size.huge
+
+// @function 		Format timestamp to date and time string
+// @param timestamp	The time to format
+// @returns			The time formatted as "MM-dd (E) - HH:mm"
+export format_timeToString(int timestamp) =>
+    string dateStr = str.format_time(timestamp, DATE_FORMAT, DEFAULT_TIMEZONE)
+    string timeStr = str.format_time(timestamp, TIME_FORMAT, DEFAULT_TIMEZONE)
+    str.format("{0} - {1}", dateStr, timeStr)
+
+format_sentimentType(Sentiment s, PDArray pd) => str.format("{0}{1}", str.tostring(s), str.tostring(pd))
+
+// @function		Parses the specified session to UNIX time values
+// @param sess 		The session string (e.g., "1300-1400")
+// @param timezone  Defaults to "America/New_York"
+// @param interval	Defaults to 1 minute ("1")
+// @returns			A tuple of UNIX time values [time, sessionStart, sessionEnd] if the current bar time is within the session; `na` otherwise
+export parseSessionToTime(string sess, string timezone = na, string interval = na) =>
+	tz = val(timezone, DEFAULT_TIMEZONE)
+	intvl = val(interval, DEFAULT_INTERVAL)
+    int t = time(intvl, sess, tz)
+
+    if not na(t)
+        arr = str.split(sess, "-")
+        sH = str.tonumber(str.substring(arr.get(0), 0, 2))
+        sM = str.tonumber(str.substring(arr.get(0), 2, 4))
+        eH = str.tonumber(str.substring(arr.get(1), 0, 2))
+        eM = str.tonumber(str.substring(arr.get(1), 2, 4))
+        domInc = sH == 0 ? 1 : 0 // midnight (0 hour) needs to advance to the next day of month or it will not plot correctly
+        start = timestamp(tz, year(t), month(t), dayofmonth(t) + domInc, int(sH), int(sM))
+        end = timestamp(tz, year(t), month(t), dayofmonth(t) + domInc, int(eH), int(eM))
+        [t, start, end]
+
+
+// ------------ TYPES / METHODS ------------ //
+// ----------------------------------------- //
+
+// @type 			Defines a session that can be named and includes internal validation
+// @field name 		A display-friendly name (e.g., "NY AM")
+// @field session	A string defining the session time range (e.g., "1300-1400")
+// @field enabled	An optional property that can be used for custom logic; this has no internal effect (defaults to `false`)
+// @field start		UNIX time value representing the start of the session. Invoke `calculateTime` to set. May be `na` if not active
+// @field end		UNIX time value representing the end of the session. Invoke `calculateTime` to set. May be `na` if not active
+export type Session
+    string name
+    string session
+    bool enabled = false
+    int start
+    int end
+    int _t
+
+// @function 	Checks of the validity of the `session` field by parsing and comparing start/end values
+// @param this	The Session object reference
+// @returns		A chainable reference, or throws a runtime error if invalid
+export method validate(Session this) =>
+    string err = na
+    arr = str.split(this.session, "-")
+
+    if not (arr.size() == 2)
+        err := "missing session start and/or end time"
+    else
+        float start = str.tonumber(arr.get(0))
+        float end = str.tonumber(arr.get(1))
+
+        if start >= end
+            err := "start time must occur before end time"
+        // TODO correctly count time difference
+        // else if end - start != 30
+        //     err := "session must be 30 minutes"
+        // TODO ensure sessions don't overlap
+    
+    if this.enabled and not na(err)
+        runtime.error(str.format("Invalid session for {0}: {1}.", this.name, err))
+    this
+
+// @function	Calculates the current bar time against the session, setting `start` and `end` fields if active
+// @param this	The Session object reference
+// @returns		A chainable reference, or throws a runtime error if invalid
+export method calculateTime(Session this) =>
+    [t, start, end] = parseSessionToTime(this.session)
+    this._t := t
+    this.start := start
+    this.end := end
+    this
+
+// @function	Checks if the session is active based on the current bar time
+// @param this	The Session object reference
+// @returns		Boolean
+export method isActive(Session this) =>
+    this.calculateTime()
+    not na(this._t)
+
+// @type 		Defines a `Gap` object that represents the type of gap and its levels.
+// @field type		The sentiment of the gap (e.g., `Sentiment.BULLISH`)
+// @field name		A display-friendly name (e.g., "+FVG")
+// @field startTime	UNIX time value representing the start of the gap
+// @field endTime	UNIX time value representing the end of the gap
+// @field startIndex	Bar index value representing the start of the gap
+// @field endIndex	Bar index value representing the end of the gap
+// @field gapLow		The lowest price level of the gap
+// @field gapHigh		The highest price level of the gap
+// @field ce			The consequent encroachment level of the gap
+export type Gap
+    Sentiment _type
+    string name
+    int startTime
+    int endTime
+    int startIndex
+    int endIndex
+    float gapLow
+    float gapHigh
+    float ce
+
+// @function	Checks if the previous bars form a Fair Value Gap (FVG).
+// @param barIdx	The index of the bar to check from. Defaults to 0 (current bar).
+// @param includeVI	 If `true`, the FVG calculation will include the Volume Imbalance (VI).
+// @returns		A `Gap` object if a FVG is detected, otherwise `na`.
+export isFVG(int barIdx = 0, bool includeVI = true) =>
+    i = barIdx
+    Gap fvg = na
+
+    if barstate.isconfirmed and high[1+i] > high[2+i] and low[i] > high[2+i]
+        float gapTop = includeVI and close[i] > open[i] and open[i] > close[1+i] ? open[i] : low[i]
+        float gapBottom = includeVI and open[2+i] < close[2+i] and close[2+i] < open[1+i] ? close[2+i] : high[2+i]
+        fvg := Gap.new(Sentiment.BULLISH, format_sentimentType(Sentiment.BULLISH, PDArray.FVG),
+          time[2+i], time[i], bar_index[2+i], bar_index[i], gapBottom, gapTop, math.avg(gapBottom, gapTop))
+
+    else if barstate.isconfirmed and low[1+i] < low[2+i] and high[i] < low[2+i]
+        float gapTop = includeVI and open[2+i] > close[2+i] and close[2+i] > open[1+i] ? close[2+i] : low[2+i]
+        float gapBottom = includeVI and open[i] > close[i] and open[i] < close[1+i] ? open[i] : high[i]
+        fvg := Gap.new(Sentiment.BEARISH, format_sentimentType(Sentiment.BEARISH, PDArray.FVG), 
+          time[2+i], time[i], bar_index[2+i], bar_index[i], gapBottom, gapTop, math.avg(gapBottom, gapTop))
+
+    fvg
+
+// @function	Checks if the previous bars form a Volume Imbalance (VI).
+// @param barIdx	The index of the bar to check from. Defaults to 0 (current bar).
+// @returns		A `Gap` object if a VI is detected, otherwise `na`.
+export isVolumeImbalance(int barIdx = 0) =>
+    i = barIdx
+    Gap vi = na
+
+    if barstate.isconfirmed and open[i] > close[1+i] and close[i] > close[1+i] and close[1+i] > open[1+i]
+        vi := Gap.new(Sentiment.BULLISH, format_sentimentType(Sentiment.BULLISH, PDArray.VI),
+          time[2+i], time[i], bar_index[2+i], bar_index[i], close[1+i], open[i], math.avg(close[1+i], open[i]))
+    else if barstate.isconfirmed and open[i] < close[1+i] and close[i] < close[1+i] and close[1+i] < open[1+i]
+        vi := Gap.new(Sentiment.BEARISH, format_sentimentType(Sentiment.BEARISH, PDArray.VI), 
+          time[2+i], time[i], bar_index[2+i], bar_index[i], open[i], close[1+i], math.avg(open[i], close[1+i]))
+
+    vi
+
+// @function	Checks if the previous bars form a Liquidity Void (LV).
+// @param barIdx	The index of the bar to check from. Defaults to 0 (current bar).
+// @returns		A `Gap` object if a LV is detected, otherwise `na`.
+export isLiquidityVoid(int barIdx = 0) =>
+    i = barIdx
+    Gap lv = na
+
+    if barstate.isconfirmed and low[i] > high[1+i]
+        lv := Gap.new(Sentiment.BULLISH, format_sentimentType(Sentiment.BULLISH, PDArray.LV),
+          time[2+i], time[i], bar_index[2+i], bar_index[i], high[1+i], low[i], math.avg(high[1+i], low[i]))
+    else if barstate.isconfirmed and high[i] < low[1+i]
+        lv := Gap.new(Sentiment.BEARISH, format_sentimentType(Sentiment.BULLISH, PDArray.LV),
+          time[2+i], time[i], bar_index[2+i], bar_index[i], high[i], low[1+i], math.avg(high[i], low[1+i]))

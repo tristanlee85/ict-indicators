@@ -1,0 +1,680 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public
+// License 2.0 at https://mozilla.org/MPL/2.0/
+// © tristanlee85
+// Inspired by the work of cryptonnnite and EK39.
+//@version=6
+//
+// This indicator identifies and highlights the first “fair value gap” (also
+// referred to as the “First presentation”) that appears after a chosen
+// session start time. A fair value gap (FVG) is a price inefficiency
+// between candles where buyers or sellers failed to transact. When
+// multiple sessions are enabled, the script resets at the beginning of
+// each configured session so that only the first imbalance of that
+// session is drawn on the chart for the current day.
+//
+// Supported session start times include midnight (12:00 AM), the New York
+// morning open (9:30 AM), the New York afternoon (1:30 PM), and up to three
+// additional user‑defined start times. The extend offset parameter
+// controls how long the imbalance boxes and lines persist on the chart:
+//
+//   • Offset ≥ 0 – the imbalance extends to the current bar plus the
+//     specified number of bars ahead.
+//   • Offset = –1 – the imbalance extends only until the next session
+//     begins and then stops.
+//   • Offset = –2 – the imbalance extends across all sessions until
+//     midnight of the current day.
+
+indicator("ICT First Presentation FVG", shorttitle="ICT FFVG", overlay=true, max_labels_count=500)
+// Import the custom helper library. It provides enumerations,
+// detection functions (e.g., isFVG, isVolumeImbalance, isLiquidityVoid), and
+// style utilities. Using these helpers reduces boilerplate and
+// aligns with ICT concepts.
+import tristanlee85/helpers/1 as helpers
+
+// ────────────────────────────────────────────────────────────────
+// Constants
+//
+// These values are fixed at compile time and used throughout the
+// script. Declaring them in upper‑case snake case follows the
+// recommended Pine coding style.
+const string TIMEZONE        = "America/New_York"        // Primary timezone for all time calculations
+const int    MINUTES_IN_HOUR = 60                       // Number of minutes in one hour
+const int    MINUTES_IN_DAY  = 24 * MINUTES_IN_HOUR     // Number of minutes in one day
+
+// ────────────────────────────────────────────────────────────────
+// Inputs
+const string GROUP_SESSIONS   = "Sessions"                                                     // Group name for built‑in session toggles
+const string GROUP_USER_SESS  = "User Sessions – Only the first field is used. Leave blank to disable."  // Group for custom sessions
+
+// ────────────────────────────────────────────────────────────────
+// Monday extension option
+//
+// When enabled, the first FVG occurring after the 9:30 AM session on Monday
+// will extend across all trading days through Friday’s close. This
+// supersedes the older Monday extension controls that allowed a mix of
+// sessions and imbalance types. Use this to highlight the weekly
+// significance of the Monday 9:30 FVG.
+bool extendMonFFvgInput = input.bool(false, "Extend Monday First FVG", group = "General", inline = "extend")
+
+// ────────────────────────────────────────────────────────────────
+// Label formatting options
+//
+// Provide a dropdown and custom text field for users to customise
+// imbalance labels. The default option replicates the built‑in
+// formatting: "MM‑dd (E) HH:MM AM/PM (HH:MM) Type". When the
+// "Custom" option is selected, the placeholders {date}, {time12},
+// {time24}, and {type} can be used to assemble any desired format.
+const string GROUP_LABEL_FORMAT = "Label Format"
+string labelFormatTypeInput  = input.string("Default", title = "Label Format Type", options = ["Default", "Custom"], group = GROUP_LABEL_FORMAT)
+string customLabelFormatInput = input.string("{date} {time12} ({time24}) {type}", title = "Custom Format", group = GROUP_LABEL_FORMAT)
+
+// Session toggles: enable the built‑in and user‑defined session starts. Only the first user
+// session input is used; subsequent toggles allow turning them on or off.
+bool   midnightToggleInput   = input.bool(true,  "Midnight – 12:00 AM", group = GROUP_SESSIONS)
+bool   nyAmToggleInput       = input.bool(true,  "NY AM – 9:30 AM",   group = GROUP_SESSIONS)
+bool   nyPmToggleInput       = input.bool(true,  "NY PM – 1:30 PM",   group = GROUP_SESSIONS)
+bool   session1ToggleInput   = input.bool(false, "Session 1",          group = GROUP_USER_SESS, inline = "session1")
+string session1Input         = input.session("0000-0000", "", group = GROUP_USER_SESS, inline = "session1")
+bool   session2ToggleInput   = input.bool(false, "Session 2",          group = GROUP_USER_SESS, inline = "session2")
+string session2Input         = input.session("0000-0000", "", group = GROUP_USER_SESS, inline = "session2")
+bool   session3ToggleInput   = input.bool(false, "Session 3",          group = GROUP_USER_SESS, inline = "session3")
+string session3Input         = input.session("0000-0000", "", group = GROUP_USER_SESS, inline = "session3")
+
+string visualizationTypeInput    = input.string("Blocks", title = "Visualization Type", options = ["Blocks", "Lines"], group = "General")
+int    pastNumDaysInput          = input.int(5, title = "Previous Days Imbalances", minval = 0, group = "General", tooltip = "Include past X days for imbalances; 0 to only show today's")
+bool   extendImbalanceInput      = input.bool(true,  title = "Extend Imbalances", group = "General", inline = "extend")
+bool   extendOldImbalancesInput  = input.bool(false, title = "Extend Previous Imbalances", group = "General", tooltip = "Extends imbalances to the end of the session, or out to the current candle", inline = "extend")
+int    extendOffsetInput         = input.int(-1, title = "Offset", minval = -2, group = "General", tooltip = "Offset: 0 or greater extends to current bar + offset; -1 ends at next session start; -2 ends at midnight")
+
+bool   showFvgInput           = input.bool(true,  title = "Show Fair Value Gaps",   group = "Show Imbalances", inline = "FVG OpenClose")
+bool   includeOpenCloseInput  = input.bool(true, title = "Include Open/Close Gap", group = "Show Imbalances", inline = "FVG OpenClose")
+bool   showViInput            = input.bool(false, title = "Show Volume Imbalances", group = "Show Imbalances")
+bool   showLvInput            = input.bool(false, title = "Show Liquidity Voids",   group = "Show Imbalances")
+bool   showCeInput            = input.bool(true,  title = "C.E.", tooltip = "C.E. – Consequent Encroachment", group = "General", inline = "ce")
+string ceStyleInput           = input.string("dotted", title = "", options = ["dotted", "dashed", "solid"], group = "General", inline = "ce")
+color  ceColorInput           = input.color(color.black, title = "", group = "General", inline = "ce")
+
+bool   showDateLabelsInput  = input.bool(true,  title = "Show Labels",    group = "Labels", inline = "labelSettings")
+bool   showTimeLabelInput   = input.bool(true,  title = "Include Time",    group = "Labels", inline = "labelSettings")
+bool   showTypeLabelInput   = input.bool(true,  title = "Include Type",    group = "Labels", inline = "labelSettings")
+string dateLabelXPosInput   = input.string("right", title = "X Position", options = ["left", "center", "right"],  group = "Labels", inline = "labelPosition")
+string dateLabelYPosInput   = input.string("top",   title = "Y Position", options = ["top",  "center", "bottom"], group = "Labels", inline = "labelPosition")
+string dateLabelSizeInput   = input.string("small", title = "Label Size",  options = ["tiny", "small", "normal", "large", "huge"], group = "Labels", inline = "labelPosition")
+color  dateLabelColorInput  = input.color(color.black, title = "Label Color", group = "Labels", inline = "labelPosition")
+
+color  fvgColorInput        = input.color(color.new(color.purple, 75), title = "FVG Color", group = "Block & Line Styles", inline = "boxColor")
+color  fvgPrevColorInput    = input.color(color.new(color.gray,   75), title = "Previous",   group = "Block & Line Styles", inline = "boxColor")
+color  viColorInput         = input.color(color.new(color.red,    75), title = "VI Color",    group = "Block & Line Styles", inline = "viColor")
+color  viPrevColorInput     = input.color(color.new(color.gray,   75), title = "Previous",   group = "Block & Line Styles", inline = "viColor")
+color  lvColorInput         = input.color(color.new(color.blue,   75), title = "LV Color",    group = "Block & Line Styles", inline = "lvColor")
+color  lvPrevColorInput     = input.color(color.new(color.gray,   75), title = "Previous",   group = "Block & Line Styles", inline = "lvColor")
+color  borderColorInput     = input.color(color.new(color.purple, 75), title = "Border Color", group = "Block & Line Styles", inline = "boxBorderColor")
+string borderStyleInput      = input.string("dotted", title = "", options = ["dotted", "dashed", "solid"], group = "Block & Line Styles", inline = "boxBorderColor")
+int    borderLineWidthInput = input.int(0, title = "Border/Line Width", minval = 0, group = "Block & Line Styles")
+
+// ────────────────────────────────────────────────────────────────
+// Monday extension options
+//
+// These inputs allow extending Monday imbalances through the end of the
+// week. Select which sessions (Midnight, 9:30 AM or 1:30 PM) and
+// which imbalance types (FVG, VI, LV) should remain visible across all
+// days of the same week. For example, if you check 9:30 AM and FVG,
+// the first FVG after the Monday 9:30 AM open will extend through
+// Friday.
+// Duplicate Monday extension inputs removed; see the definitions earlier in the Inputs section.
+
+// ────────────────────────────────────────────────────────────────
+// Label formatting options
+//
+// Provide a dropdown and custom text field for users to customise
+// imbalance labels. The default option replicates the built‑in
+// formatting: "MM‑dd (E) HH:MM AM/PM (HH:MM) Type". When the
+// "Custom" option is selected, the placeholders {date}, {time12},
+// {time24}, and {type} can be used to assemble any desired format.
+// Duplicate label format inputs removed; definitions appear earlier in the Inputs section.
+
+// ────────────────────────────────────────────────────────────────
+// Utility functions
+// @function strToFloat
+// Converts a numeric string to a floating‑point number. Commas
+// inside the string are removed before conversion.
+// @param s Numeric string to convert.
+// @returns Float representation of the input.
+strToFloat(string s) =>
+    str.tonumber(str.replace_all(s, ",", ""))
+
+// @function strToInt
+// Converts a numeric string to an integer. Uses `strToFloat()`
+// for normalisation before casting.
+// @param s Numeric string to convert.
+// @returns Integer representation of the input.
+strToInt(string s) =>
+    int(strToFloat(s))
+
+// @function cleanType
+// Removes leading plus (+) or minus (–) signs from an imbalance type.
+// Imbalance identifiers include a sign to denote direction (e.g., “+FVG”).
+// @param imbalanceType The raw imbalance type string including its sign.
+// @returns The type string without sign.
+cleanType(string imbalanceType) =>
+    str.replace(str.replace(imbalanceType, "+", ""), "-", "")
+
+// @function getColorByType
+// Retrieves the correct colour for a given imbalance type. When
+// `isPast` is true, the “previous” colour is returned; otherwise
+// the primary colour is used.
+// @param _type Imbalance type including sign (e.g., “+FVG”).
+// @param isPast If true, returns the colour for past imbalances.
+// @returns A colour value for the specified type.
+getColorByType(string _type, bool isPast=false) =>
+    switch cleanType(_type)
+        "FVG" => isPast ? fvgPrevColorInput : fvgColorInput
+        "VI"  => isPast ? viPrevColorInput  : viColorInput
+        "LV"  => isPast ? lvPrevColorInput  : lvColorInput
+
+// @function getMinutesFromTimeString
+// Parses the first portion of a session string (HH:MM-HH:MM) and converts
+// it to minutes after midnight. Only the start time before the dash is
+// considered. Returns `na` if the input string is empty or invalid.
+// @param sess A session string from `input.session()`.
+// @returns Number of minutes after midnight represented by the start time.
+getMinutesFromTimeString(string sess) =>
+    int result = na
+    if str.length(sess) > 0
+        int hh = int(str.tonumber(str.substring(sess, 0, 2)))
+        int mm = int(str.tonumber(str.substring(sess, 3, 2)))
+        result := hh * MINUTES_IN_HOUR + mm
+    result
+
+// @function buildSessionStarts
+// Builds an array of session start times (in minutes after midnight) based
+// on the user’s toggles. Built‑in sessions (midnight, 9:30 AM, 1:30 PM)
+// are included when enabled, and up to three custom sessions are parsed
+// via `getMinutesFromTimeString()`. When no sessions are selected the
+// default 9:30 AM time is added to avoid an empty array. The resulting
+// array is sorted ascending.
+// @returns Sorted array of selected session start times.
+buildSessionStarts() =>
+    array<int> starts = array.new<int>()
+    if midnightToggleInput
+        array.push(starts, 0)
+    if nyAmToggleInput
+        array.push(starts, 9 * MINUTES_IN_HOUR + 30)
+    if nyPmToggleInput
+        array.push(starts, 13 * MINUTES_IN_HOUR + 30)
+    if session1ToggleInput
+        int s1 = getMinutesFromTimeString(session1Input)
+        if not na(s1)
+            array.push(starts, s1)
+    if session2ToggleInput
+        int s2 = getMinutesFromTimeString(session2Input)
+        if not na(s2)
+            array.push(starts, s2)
+    if session3ToggleInput
+        int s3 = getMinutesFromTimeString(session3Input)
+        if not na(s3)
+            array.push(starts, s3)
+    if array.size(starts) == 0
+        array.push(starts, 9 * MINUTES_IN_HOUR + 30)
+    array.sort(starts, order = order.ascending)
+    starts
+
+// @function getSessionIndex
+// Determines the index of the current session given the current time in
+// minutes and an array of session starts. It returns the highest
+// index where the start time is less than or equal to the current time.
+// If the current time precedes all session starts, 0 is returned.
+// @param minutesOfDay The number of minutes after midnight for the current bar.
+// @param starts A sorted array of session start times.
+// @returns The session index applicable to the current time.
+getSessionIndex(int minutesOfDay, array<int> starts) =>
+    int idx = 0
+    for i = 0 to array.size(starts) - 1
+        if minutesOfDay >= array.get(starts, i)
+            idx := i
+    idx
+
+// @function formatDate
+// Formats a timestamp into a human‑readable date string “MM‑dd (E)” using
+// the configured timezone. (E) denotes the abbreviated day of week.
+// @param ts Timestamp to format.
+// @returns A string like "07-31 (Thu)".
+formatDate(int ts) =>
+    str.format_time(ts, "MM-dd (E)", TIMEZONE)
+
+// @function formatLabel
+// Builds a descriptive label for an imbalance. The label includes the
+// date, the session’s start time in both 12‑hour and 24‑hour formats,
+// and the imbalance type. For example: "07‑31 (Thu) 1:30 PM (13:30) +FVG".
+// @param type The imbalance type including sign (e.g., "+FVG").
+// @param sessionIdx Index of the current session in `starts`.
+// @param starts Array of session start times used to derive the hour.
+// @returns A formatted label string.
+formatLabel(string type, int sessionIdx, array<int> starts) =>
+    // Derive the date and time for this label. We use the previous bar’s
+    // timestamp (`time[1]`) to associate the imbalance with the bar on
+    // which it occurred. The session’s start time in minutes is
+    // converted to hours and minutes, then combined with the date to
+    // build a timestamp. We then format that timestamp using
+    // `str.format_time()` to generate both 24‑hour and 12‑hour strings.
+    string dateStr = formatDate(time[1])
+    int    sessMin = array.get(starts, sessionIdx)
+    // Break the session start into hours and minutes using integer
+    // division. This avoids fractional values such as 9.5.
+    int    sessHour24 = int(math.floor(sessMin / MINUTES_IN_HOUR))
+    int    sessMinute = sessMin % MINUTES_IN_HOUR
+    // Construct a timestamp for the session’s opening time on the day
+    // of the imbalance. This uses the time components of `time[1]` and
+    // replaces the hour/minute fields with the session start values.
+    int    sessTs = timestamp(TIMEZONE,
+            year(time[1], TIMEZONE),
+            month(time[1], TIMEZONE),
+            dayofmonth(time[1], TIMEZONE),
+            sessHour24,
+            sessMinute)
+    // Format times. "HH:mm" yields a 24‑hour time with leading zeros,
+    // while "h:mm a" uses a 12‑hour clock and appends AM/PM.
+    string hh24    = str.format_time(sessTs, "HH:mm", TIMEZONE)
+    string hh12    = str.format_time(sessTs, "h:mm a", TIMEZONE)
+    // When using the custom format option, substitute placeholders with
+    // the computed values. Supported placeholders:
+    //  {date}   – formatted date (MM-dd (E))
+    //  {time12} – 12‑hour session time with AM/PM
+    //  {time24} – 24‑hour session time
+    //  {type}   – imbalance type including sign (e.g., +FVG)
+    if labelFormatTypeInput == "Custom"
+        string tmp = customLabelFormatInput
+        tmp := str.replace(tmp, "{date}", dateStr)
+        tmp := str.replace(tmp, "{time12}", hh12)
+        tmp := str.replace(tmp, "{time24}", hh24)
+        tmp := str.replace(tmp, "{type}", type)
+        tmp
+    else
+        // Build the default label by conditionally including the date,
+        // time and type fields based on the user toggles. This retains
+        // compatibility with existing inputs such as Show Date Labels,
+        // Include Time and Include Type. Each component is added to an
+        // array and joined with spaces to avoid extra whitespace.
+        var string[] parts = array.new<string>()
+        if showDateLabelsInput
+            array.push(parts, dateStr)
+        if showTimeLabelInput
+            array.push(parts, str.format("{0} ({1})", hh12, hh24))
+        if showTypeLabelInput
+            array.push(parts, type)
+        // Join parts with spaces. If no parts are selected, return an
+        // empty string to avoid drawing empty labels.
+        string out = ""
+        for [idx, part] in parts
+            if out == ""
+                out := part
+            else
+                out := str.format("{0} {1}", out, part)
+        out
+
+// @function recordImbalanceDate
+// Keeps track of whether the first imbalance of a given type has already
+// occurred for the current date and session. If the identifier is not
+// present in `datesArr`, it is added and the function returns true,
+// indicating that the imbalance should be plotted. Otherwise it
+// returns false.
+//
+// The identifier has the form "Type_MM-dd (E)_SessionIndex" where
+// `Type` has no sign. Using the session index ensures separate
+// imbalances per session.
+//
+// @param type        Imbalance type including sign (e.g., "+FVG").
+// @param sessionIdx  Index of the current session.
+// @param datesArr    Array storing all recorded imbalance identifiers.
+// @returns True if the imbalance is new for this session; false otherwise.
+recordImbalanceDate(string type, int sessionIdx, array<string> datesArr) =>
+    string id     = str.format("{0}_{1}_{2}", cleanType(type), formatDate(time), sessionIdx)
+    bool   exists = array.indexof(datesArr, id) > -1
+    if not exists
+        array.push(datesArr, id)
+    not exists
+
+// @function isPastImbalance
+// Determines whether an imbalance belongs to a prior day relative
+// to the most recent day recorded in `latestDay`. Two imbalances
+// occurring on different sessions of the same day are considered
+// current and therefore not “past”.
+// @param id            The imbalance identifier string ("Type_MM-dd (E)_SessionIndex").
+// @param latestDateStr The date of the most recent imbalance ("MM-dd (E)").
+// @returns True if the imbalance date is older than `latestDateStr`.
+isPastImbalance(string id, string latestDateStr) =>
+    not str.contains(id, latestDateStr)
+
+// ────────────────────────────────────────────────────────────────
+// State
+// We no longer need separate arrays to store drawing objects because
+// `ImbalanceRec` holds references to boxes, lines and labels. Only
+// `imbalanceDatesArr` remains to track which imbalances have been
+// recorded. The `latestDay` variable stores the date of the most
+// recent imbalance drawn on the chart.
+var array<string>  imbalanceDatesArr    = array.new<string>()
+var string         latestDay            = na
+//
+// Define a record to store all the details of an imbalance. Using a single
+// type to hold the id, type, session index, day-of-year, Monday flag
+// and drawing object references (box/lines/label) simplifies the code
+// and eliminates the need for parallel arrays. All imbalances are
+// stored in a single array of this type.
+type ImbalanceRec
+    string imbalanceType = ""   // Imbalance type with sign (e.g., "+FVG", "-FVG")
+    int    timestamp     = 0      // Time in milliseconds since epoch
+    int    sessionIndex  = 0      // Session index when imbalance occurred
+    int    dayOfYear     = 0      // Day-of-year for Monday/week comparisons
+    bool   isMondayFirst = false  // True if Monday 9:30 FVG with extension enabled
+    float  topPrice      = na     // Top price level of the imbalance
+    float  bottomPrice   = na     // Bottom price level of the imbalance
+    float  cePrice       = na     // Consequent encroachment price level
+    box    boxObj        = na     // Box object for block visualization
+    line   topLine       = na     // Top boundary line for line visualization
+    line   bottomLine    = na     // Bottom boundary line for line visualization
+    line   ceLine        = na     // Consequent encroachment line
+    label  lbl           = na     // Label for line visualization
+
+// Array holding all recorded imbalances on the chart. Each element is an
+// instance of `ImbalanceRec` containing all relevant information and
+// drawing references. When iterating, we will retrieve objects and
+// update or delete them accordingly.
+var array<ImbalanceRec> imbalances = array.new<ImbalanceRec>()
+// The `ImbalanceRec` type encapsulates all metadata needed for extension
+// decisions, including the day‑of‑year on which the imbalance was
+// created and whether it qualifies as the first Monday 9:30 FVG. We
+// therefore no longer need separate arrays for Monday extension flags or
+// day‑of‑year values. Only `imbalanceDatesArr` and `imbalances` are used.
+
+// Compute session start times
+array<int> sessionStarts = buildSessionStarts()  // Sorted list of selected session start times
+
+// Determine minutes-of-day for current and previous bars
+int curHour        = hour(time, TIMEZONE)
+int curMin         = minute(time, TIMEZONE)
+int curMinuteOfDay = curHour * MINUTES_IN_HOUR + curMin
+int prevHour       = hour(time[1], TIMEZONE)
+int prevMin        = minute(time[1], TIMEZONE)
+int prevMinuteOfDay= prevHour * MINUTES_IN_HOUR + prevMin
+
+// Current and previous session indices
+int curSessIdx   = getSessionIndex(curMinuteOfDay, sessionStarts)
+int prevSessIdx  = getSessionIndex(prevMinuteOfDay, sessionStarts)
+
+// Day change detection using day-of-year pattern
+int curDayOfYear   = int(str.tonumber(str.format_time(time,   "D", TIMEZONE)))
+int prevDayOfYear  = int(str.tonumber(str.format_time(time[1], "D", TIMEZONE)))
+
+bool sessionChanged = false
+if not barstate.isfirst
+    sessionChanged := (curDayOfYear != prevDayOfYear) or (curSessIdx != prevSessIdx)
+
+string curDateStr = formatDate(time)
+if sessionChanged
+    latestDay := curDateStr
+
+bool timeframeAllowed = timeframe.in_seconds(timeframe.period) <= 900
+
+// Determine if the current bar lies within the active session. Sessions
+// are defined as the interval between a start time and the next start
+// time in `sessionStarts`, or until midnight for the last session. If
+// no start time matches (e.g., when the first configured session is
+// later than the current time), `isInSession` will be false and
+// imbalances detected outside configured sessions will be ignored.
+int sessStartMin = array.get(sessionStarts, curSessIdx)
+int sessEndMin   = curSessIdx < array.size(sessionStarts) - 1 ? array.get(sessionStarts, curSessIdx + 1) : MINUTES_IN_DAY
+bool isInSession = (curMinuteOfDay >= sessStartMin) and (curMinuteOfDay < sessEndMin)
+
+// Detect imbalances using helper functions and record them. This block
+// executes on each bar when the timeframe is allowed and the current
+// bar is within a configured session. Bars outside configured sessions
+// are skipped, preventing false detections before the first session start.
+if timeframeAllowed and isInSession
+    // Collect all detected gaps for this bar. We use the helper
+    // functions to simplify gap detection for each enabled type. Each
+    // call returns either a Gap object or `na`. Detected gaps are
+    // appended to `gaps`.
+    var array<helpers.Gap> gaps = array.new<helpers.Gap>()
+    if showFvgInput
+        // Detect a fair value gap using the helper. The `includeOpenCloseInput`
+        // input controls whether to include open/close gaps as part of the FVG.
+        helpers.Gap fvgGap = helpers.isFVG(includeOpenCloseInput)
+        if not na(fvgGap)
+            array.push(gaps, fvgGap)
+    if showViInput
+        // Detect a volume imbalance using the helper.
+        helpers.Gap viGap = helpers.isVolumeImbalance()
+        if not na(viGap)
+            array.push(gaps, viGap)
+    if showLvInput
+        // Detect a liquidity void using the helper.
+        helpers.Gap lvGap = helpers.isLiquidityVoid()
+        if not na(lvGap)
+            array.push(gaps, lvGap)
+    // Loop through each detected gap. Each gap is converted into an
+    // ImbalanceRec if it has not already been recorded for the current
+    // session and type. Fields such as top, bottom and consequent
+    // encroachment are computed from the gap's high/low values.
+    int gapCount = array.size(gaps)
+    if gapCount > 0
+        for gi = 0 to gapCount - 1
+            helpers.Gap gap = array.get(gaps, gi)
+            string t   = gap.name
+            int sBar   = gap.startIndex
+            int eBar   = gap.endIndex
+            // Determine the high (top) and low (bottom) of the gap.
+            // The helper returns gapLow and gapHigh fields but they may not
+            // be ordered, so we normalise them to ensure top >= bottom.
+            float topGap = math.max(gap.gapLow, gap.gapHigh)
+            float botGap = math.min(gap.gapLow, gap.gapHigh)
+            float ce     = gap.ce
+            // Ensure we only plot the first occurrence of this type in the
+            // current session by checking our imbalance log. If it's
+            // already recorded, skip plotting.
+            if recordImbalanceDate(t, curSessIdx, imbalanceDatesArr)
+                ImbalanceRec rec = ImbalanceRec.new()
+                rec.imbalanceType := t
+                // Use the gap's end time as the timestamp for this imbalance.
+                rec.timestamp     := gap.endTime
+                rec.sessionIndex  := curSessIdx
+                rec.dayOfYear     := curDayOfYear
+                // Store the price levels for later use. topPrice is the
+                // greater of the gap's low/high values, and bottomPrice
+                // is the lesser. cePrice stores the consequent encroachment.
+                rec.topPrice      := topGap
+                rec.bottomPrice   := botGap
+                rec.cePrice       := ce
+                bool isMon = str.contains(formatDate(time), "(Mon)")
+                int sessMin = array.get(sessionStarts, curSessIdx)
+                string baseType = cleanType(t)
+                rec.isMondayFirst := extendMonFFvgInput and isMon and (baseType == "FVG") and (sessMin == 9 * MINUTES_IN_HOUR + 30)
+                latestDay := curDateStr
+                // Calculate style constants using helper enumerations. This
+                // maps user-selected style strings into the helper
+                // enumerations for line and box styling.
+                helpers.LineStyleType lsCe = switch ceStyleInput
+                    "solid"  => helpers.LineStyleType.SOLID
+                    "dashed" => helpers.LineStyleType.DASH
+                    => helpers.LineStyleType.DOTS
+                int ceStyleConst = helpers.style_getLineStyleFromType(lsCe)
+                helpers.LineStyleType lsBorder = switch borderStyleInput
+                    "solid"  => helpers.LineStyleType.SOLID
+                    "dashed" => helpers.LineStyleType.DASH
+                    => helpers.LineStyleType.DOTS
+                int borderStyleConst = helpers.style_getLineStyleFromType(lsBorder)
+                helpers.TextSizeType txtSize = switch dateLabelSizeInput
+                    "tiny"   => helpers.TextSizeType.TINY
+                    "small"  => helpers.TextSizeType.SMALL
+                    "normal" => helpers.TextSizeType.NORMAL
+                    "large"  => helpers.TextSizeType.LARGE
+                    => helpers.TextSizeType.HUGE
+                int textSizeConst = helpers.style_getTextSizeFromType(txtSize)
+                helpers.HAlignType hAlign = switch dateLabelXPosInput
+                    "left"   => helpers.HAlignType.LEFT
+                    "center" => helpers.HAlignType.CENTER
+                    => helpers.HAlignType.RIGHT
+                helpers.VAlignType vAlign = switch dateLabelYPosInput
+                    "top"    => helpers.VAlignType.TOP
+                    "center" => helpers.VAlignType.MIDDLE
+                    => helpers.VAlignType.BOTTOM
+                int hAlignConst = helpers.style_getTextHAlignFromType(hAlign)
+                int vAlignConst = helpers.style_getTextVAlignFromType(vAlign)
+                if showCeInput
+                    rec.ceLine := line.new(x1=sBar, y1=ce, x2=eBar, y2=ce,
+                                           xloc=xloc.bar_index, color=ceColorInput,
+                                           style=ceStyleConst, width=borderLineWidthInput)
+                if visualizationTypeInput == "Blocks"
+                    rec.boxObj := box.new(left=sBar, top=topGap, right=eBar, bottom=botGap,
+                                          xloc=xloc.bar_index, border_color=borderColorInput,
+                                          border_style=borderStyleConst,
+                                          bgcolor=getColorByType(t), border_width=borderLineWidthInput,
+                                          text=formatLabel(t, curSessIdx, sessionStarts),
+                                          text_size=textSizeConst,
+                                          text_halign=hAlignConst,
+                                          text_valign=vAlignConst,
+                                          text_color=dateLabelColorInput, text_formatting=text.format_bold)
+                else
+                    rec.topLine := line.new(x1=sBar, y1=topGap, x2=eBar, y2=topGap,
+                                             xloc=xloc.bar_index, color=getColorByType(t),
+                                             width=borderLineWidthInput, style=ceStyleConst)
+                    rec.bottomLine := line.new(x1=sBar, y1=botGap, x2=eBar, y2=botGap,
+                                                xloc=xloc.bar_index, color=getColorByType(t),
+                                                width=borderLineWidthInput, style=ceStyleConst)
+                    rec.lbl := label.new(x=eBar, y=topGap, xloc=xloc.bar_index,
+                                         text=formatLabel(t, curSessIdx, sessionStarts),
+                                         size=textSizeConst,
+                                         style=label.style_none, text_formatting=text.format_bold)
+                array.push(imbalances, rec)
+else if not timeframeAllowed
+    // When the timeframe is higher than 15 minutes, display a warning.
+    table tTable = table.new(position.top_right, 1, 1)
+    table.cell(tTable, 0, 0, "[ICT FFVG] Please use ≤ 15m", text_color=color.red)
+
+
+
+// Colour past imbalances using the unified `imbalances` array. An
+// imbalance is considered past when its date identifier does not
+// contain `latestDay`. When in block mode, we change the box
+// background to the “previous” colour. In line mode, we recolour
+// both the top and bottom lines.
+int recCount = array.size(imbalances)
+for i = 0 to recCount - 1
+    ImbalanceRec rec = array.get(imbalances, i)
+    // An imbalance is considered past when its date (derived from
+    // its timestamp) does not match the latest day on which an
+    // imbalance was plotted.
+    if formatDate(rec.timestamp) != latestDay
+        color c = getColorByType(rec.imbalanceType, true)
+        if not na(rec.boxObj)
+            rec.boxObj.set_bgcolor(c)
+            rec.boxObj.set_border_color(borderColorInput)
+        else
+            // Only recolour lines if they exist. CE lines remain unchanged.
+            if not na(rec.topLine)
+                rec.topLine.set_color(c)
+            if not na(rec.bottomLine)
+                rec.bottomLine.set_color(c)
+
+// Remove expired imbalances beyond `pastNumDaysInput`. We build
+// a list of unique dates working backwards. When an imbalance
+// belongs to a date index larger than `pastNumDaysInput`, its
+// drawing objects are deleted. The record remains in the array but
+// will no longer display on the chart.
+int total = array.size(imbalances)
+array<string> uniqDays = array.new<string>()
+if total > 0
+    for idx = total - 1 to 0 by 1
+        ImbalanceRec rec = array.get(imbalances, idx)
+        // Extract the month and day from the record's timestamp. We
+        // convert the timestamp back into a date string and take the
+        // first five characters ("MM-dd") to group imbalances by day.
+        string mmdd = str.substring(formatDate(rec.timestamp), 0, 5)
+        if not array.includes(uniqDays, mmdd)
+            array.push(uniqDays, mmdd)
+        int dIndex = array.indexof(uniqDays, mmdd)
+        if dIndex > pastNumDaysInput
+            if not na(rec.boxObj)
+                rec.boxObj.delete()
+            if not na(rec.topLine)
+                rec.topLine.delete()
+            if not na(rec.bottomLine)
+                rec.bottomLine.delete()
+            if not na(rec.lbl)
+                rec.lbl.delete()
+            if not na(rec.ceLine)
+                rec.ceLine.delete()
+
+
+// @function extendImbalances
+// Extends all current imbalances to the right according to the user’s
+// offset setting. When `extendOldImbalancesInput` is true, every
+// imbalance on the chart is extended. Otherwise, only those
+// belonging to the current day or the Monday 9:30 FVG (when
+// extendMonFFvgInput is enabled) will continue extending.
+// Labels in line mode are repositioned based on the user’s
+// preferences. CE lines are offset slightly to avoid overlapping
+// candle bodies.
+extendImbalances(int offset) =>
+    // Compute the target X coordinate for extension. A non‑negative offset
+    // extends ahead of the current bar while a negative offset extends to
+    // the current bar (CE lines offset slightly).  
+    int target = offset >= 0 ? bar_index + offset : bar_index
+    int recCount = array.size(imbalances)
+    // Only run extension logic when imbalances exist. Pine Script
+    // functions cannot return early, so use a guard condition.
+    if recCount > 0
+        // When extending previous imbalances, iterate over every record
+        // and decide if it should be extended based on the date or
+        // Monday FVG status. Labels are repositioned for line mode.
+        if extendOldImbalancesInput
+            for i = 0 to recCount - 1
+                ImbalanceRec rec = array.get(imbalances, i)
+                bool monExt = rec.isMondayFirst and extendMonFFvgInput and (curDayOfYear >= rec.dayOfYear) and (curDayOfYear - rec.dayOfYear <= 4)
+                bool dateMatch = (formatDate(rec.timestamp) == latestDay)
+                bool extendNow = monExt or dateMatch
+                if extendOldImbalancesInput or extendNow
+                    if not na(rec.boxObj)
+                        rec.boxObj.set_right(target)
+                    if not na(rec.topLine)
+                        rec.topLine.set_x2(target)
+                    if not na(rec.bottomLine)
+                        rec.bottomLine.set_x2(target)
+                    if not na(rec.ceLine)
+                        rec.ceLine.set_x2(offset >= 0 ? bar_index + offset - 20 : bar_index - 20)
+                    if not na(rec.lbl)
+                        int xPos = na
+                        float yPos = na
+                        if not na(rec.topLine) and not na(rec.bottomLine) and not na(rec.ceLine)
+                            xPos := switch dateLabelXPosInput
+                                "left"   => rec.topLine.get_x1()
+                                "center" => int(math.avg(rec.topLine.get_x1(), rec.topLine.get_x2()))
+                                => rec.topLine.get_x2()
+                            yPos := switch dateLabelYPosInput
+                                "top"    => rec.topLine.get_y1()
+                                "center" => rec.ceLine.get_y1()
+                                => rec.bottomLine.get_y1()
+                            rec.lbl.set_xy(xPos, yPos)
+        else
+            // Only extend and reposition the last record when not
+            // extending previous imbalances. This mimics the original
+            // behaviour of extending only the most recent imbalance.
+            ImbalanceRec lastRec = array.last(imbalances)
+            bool monExt = lastRec.isMondayFirst and extendMonFFvgInput and (curDayOfYear >= lastRec.dayOfYear) and (curDayOfYear - lastRec.dayOfYear <= 4)
+            bool dateMatch = (formatDate(lastRec.timestamp) == latestDay)
+            bool extendNow = monExt or dateMatch
+            if extendNow
+                if not na(lastRec.boxObj)
+                    lastRec.boxObj.set_right(target)
+                if not na(lastRec.topLine)
+                    lastRec.topLine.set_x2(target)
+                if not na(lastRec.bottomLine)
+                    lastRec.bottomLine.set_x2(target)
+                if not na(lastRec.ceLine)
+                    lastRec.ceLine.set_x2(offset >= 0 ? bar_index + offset - 20 : bar_index - 20)
+                if not na(lastRec.lbl)
+                    lastRec.lbl.set_textalign(text.align_left)
+                    lastRec.lbl.set_x(bar_index)
+
+// Extend imbalances when enabled
+if extendImbalanceInput
+    extendImbalances(extendOffsetInput)
