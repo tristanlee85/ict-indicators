@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="max-age=31536000">
+    <meta http-equiv="Expires" content="Tue, 01 Jan 2025 00:00:00 GMT">
+    <meta name="description" content="ICT Indicators - TradingView Pine Script indicators based on Inner Circle Trader concepts">
+    <title>ICT Indicators - TradingView Pine Script Collection</title>
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f8f9fa;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 2rem 0;
+            margin-bottom: 2rem;
+            border-radius: 8px;
+        }
+        
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+            text-align: center;
+        }
+        
+        .subtitle {
+            text-align: center;
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+        
+        .section {
+            background: white;
+            margin: 2rem 0;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        h2 {
+            color: #4a5568;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid #e2e8f0;
+        }
+        
+        .indicator-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            margin-top: 2rem;
+        }
+        
+        .indicator-card {
+            background: #f7fafc;
+            padding: 1.5rem;
+            border-radius: 8px;
+            border: 1px solid #e2e8f0;
+        }
+        
+        .indicator-card h3 {
+            color: #2d3748;
+            margin-bottom: 1rem;
+        }
+        
+        .image-container {
+            text-align: center;
+            margin: 1rem 0;
+        }
+        
+        .indicator-image {
+            max-width: 100%;
+            height: auto;
+            border-radius: 4px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            transition: transform 0.3s ease;
+        }
+        
+        .indicator-image:hover {
+            transform: scale(1.02);
+        }
+        
+        .features {
+            list-style: none;
+            margin: 1rem 0;
+        }
+        
+        .features li {
+            padding: 0.5rem 0;
+            position: relative;
+            padding-left: 1.5rem;
+        }
+        
+        .features li:before {
+            content: "✓";
+            position: absolute;
+            left: 0;
+            color: #48bb78;
+            font-weight: bold;
+        }
+        
+        .footer {
+            text-align: center;
+            padding: 2rem 0;
+            color: #718096;
+            border-top: 1px solid #e2e8f0;
+            margin-top: 3rem;
+        }
+        
+        .performance-note {
+            background: #edf2f7;
+            border-left: 4px solid #4299e1;
+            padding: 1rem;
+            margin: 1rem 0;
+            border-radius: 4px;
+        }
+        
+        .performance-note strong {
+            color: #2b6cb0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>ICT Indicators</h1>
+            <p class="subtitle">TradingView Pine Script Collection based on Inner Circle Trader Concepts</p>
+        </header>
+
+        <div class="section">
+            <div class="performance-note">
+                <strong>Performance Optimized:</strong> This page uses advanced caching headers to ensure fast loading of static assets. Images and resources are cached for optimal performance.
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Available Indicators</h2>
+            <p>This collection includes several powerful TradingView indicators based on Inner Circle Trader (ICT) concepts, designed to help traders identify key market structures and opportunities.</p>
+            
+            <div class="indicator-grid">
+                <div class="indicator-card">
+                    <h3>Opening Range Projections (ORP)</h3>
+                    <div class="image-container">
+                        <img src="orp/all.png" alt="ICT Opening Range Projections - All Features" class="indicator-image" loading="lazy">
+                    </div>
+                    <ul class="features">
+                        <li>Multiple session support (Midnight, NY AM, NY PM)</li>
+                        <li>User-defined session times</li>
+                        <li>Range high/low projections</li>
+                        <li>Quadrant levels</li>
+                        <li>Customizable extend options</li>
+                    </ul>
+                </div>
+
+                <div class="indicator-card">
+                    <h3>Opening Price Levels</h3>
+                    <div class="image-container">
+                        <img src="orp/opening_price.png" alt="ICT Opening Price Levels" class="indicator-image" loading="lazy">
+                    </div>
+                    <ul class="features">
+                        <li>Session opening price identification</li>
+                        <li>Key reference levels</li>
+                        <li>Multiple timeframe support</li>
+                    </ul>
+                </div>
+
+                <div class="indicator-card">
+                    <h3>Range High/Low Analysis</h3>
+                    <div class="image-container">
+                        <img src="orp/range_highlow.png" alt="ICT Range High Low Analysis" class="indicator-image" loading="lazy">
+                    </div>
+                    <ul class="features">
+                        <li>Session range identification</li>
+                        <li>High and low boundary marking</li>
+                        <li>Support and resistance levels</li>
+                    </ul>
+                </div>
+
+                <div class="indicator-card">
+                    <h3>Swing High/Low Ranges</h3>
+                    <div class="image-container">
+                        <img src="orp/range_swing_highlow.png" alt="ICT Swing High Low Ranges" class="indicator-image" loading="lazy">
+                    </div>
+                    <ul class="features">
+                        <li>Swing point identification</li>
+                        <li>Range boundary analysis</li>
+                        <li>Market structure visualization</li>
+                    </ul>
+                </div>
+
+                <div class="indicator-card">
+                    <h3>Session Analysis</h3>
+                    <div class="image-container">
+                        <img src="orp/sessions.png" alt="ICT Session Analysis" class="indicator-image" loading="lazy">
+                    </div>
+                    <ul class="features">
+                        <li>Multiple trading session support</li>
+                        <li>Session boundary visualization</li>
+                        <li>Time-based analysis tools</li>
+                    </ul>
+                </div>
+
+                <div class="indicator-card">
+                    <h3>Price Projections</h3>
+                    <div class="image-container">
+                        <img src="orp/projections.png" alt="ICT Price Projections" class="indicator-image" loading="lazy">
+                    </div>
+                    <ul class="features">
+                        <li>Future price level projections</li>
+                        <li>Extension and retracement levels</li>
+                        <li>Target identification</li>
+                    </ul>
+                </div>
+
+                <div class="indicator-card">
+                    <h3>Quadrant Levels</h3>
+                    <div class="image-container">
+                        <img src="orp/quadrants.png" alt="ICT Quadrant Levels" class="indicator-image" loading="lazy">
+                    </div>
+                    <ul class="features">
+                        <li>Range quadrant divisions</li>
+                        <li>25%, 50%, 75% level marking</li>
+                        <li>Precision entry/exit points</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Features</h2>
+            <ul class="features">
+                <li>Based on proven Inner Circle Trader (ICT) methodologies</li>
+                <li>Multiple customizable session types</li>
+                <li>Advanced range projection algorithms</li>
+                <li>User-friendly configuration options</li>
+                <li>Compatible with TradingView Pine Script v5/v6</li>
+                <li>Optimized for performance with caching headers</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>Usage</h2>
+            <p>These Pine Script indicators can be imported into TradingView by copying the code from the respective .pine files in this repository. Each indicator includes comprehensive documentation and customizable parameters to suit different trading styles and preferences.</p>
+        </div>
+
+        <footer class="footer">
+            <p>&copy; 2024 ICT Indicators Collection. Licensed under Mozilla Public License 2.0.</p>
+            <p>Performance optimized with advanced caching headers for faster loading.</p>
+        </footer>
+    </div>
+</body>
+</html>

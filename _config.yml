@@ -1,0 +1,35 @@
+title: ICT Indicators
+description: TradingView Pine Script Collection based on Inner Circle Trader Concepts
+url: "https://tristanlee85.github.io/ict-indicators"
+baseurl: "/ict-indicators"
+theme: minima
+
+# Performance optimizations
+plugins:
+  - jekyll-sitemap
+  - jekyll-feed
+
+# Enable caching for GitHub Pages
+safe: true
+lsi: false
+highlighter: rouge
+
+# Markdown settings
+markdown: kramdown
+kramdown:
+  input: GFM
+  hard_wrap: false
+
+# Exclude from processing
+exclude:
+  - README.md
+  - .git
+  - .gitignore
+  - "*.pine"
+  
+# Static files configuration
+defaults:
+  - scope:
+      path: "orp"
+    values:
+      image: true
